@@ -10,8 +10,8 @@
 
     <properties>
         <!-- Java 21 is the current recommended LTS for Dataflow workers -->
-        <maven.compiler.source>21</maven.compiler.source>
-        <maven.compiler.target>21</maven.compiler.target>
+        <maven.compiler.source>25</maven.compiler.source>
+        <maven.compiler.target>25</maven.compiler.target>
         <beam.version>2.69.0</beam.version>
         <libraries-bom.version>26.29.0</libraries-bom.version>
     </properties>
@@ -92,8 +92,8 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.11.0</version>
                 <configuration>
-                    <source>21</source>
-                    <target>21</target>
+                    <source>25</source>
+                    <target>25</target>
                 </configuration>
             </plugin>
             
