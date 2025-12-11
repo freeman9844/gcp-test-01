@@ -9,6 +9,7 @@
     <version>1.0-SNAPSHOT</version>
 
     <properties>
+        <!-- Java 21 is the current recommended LTS for Dataflow workers -->
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
         <beam.version>2.59.0</beam.version>
@@ -17,6 +18,7 @@
 
     <dependencyManagement>
         <dependencies>
+            <!-- Google Cloud Libraries BOM to manage versions -->
             <dependency>
                 <groupId>com.google.cloud</groupId>
                 <artifactId>libraries-bom</artifactId>
@@ -28,30 +30,34 @@
     </dependencyManagement>
 
     <dependencies>
-        <!-- Apache Beam SDK -->
+        <!-- Apache Beam SDK Core -->
         <dependency>
             <groupId>org.apache.beam</groupId>
             <artifactId>beam-sdks-java-core</artifactId>
             <version>${beam.version}</version>
         </dependency>
+        
+        <!-- Dataflow Runner: Required to execute on Google Cloud Dataflow -->
         <dependency>
             <groupId>org.apache.beam</groupId>
             <artifactId>beam-runners-google-cloud-dataflow-java</artifactId>
             <version>${beam.version}</version>
         </dependency>
+        
+        <!-- Google Cloud Platform IO: For BigQuery, GCS, etc. -->
         <dependency>
             <groupId>org.apache.beam</groupId>
             <artifactId>beam-sdks-java-io-google-cloud-platform</artifactId>
             <version>${beam.version}</version>
         </dependency>
 
-        <!-- Google Cloud DLP -->
+        <!-- Google Cloud DLP Client Library -->
         <dependency>
             <groupId>com.google.cloud</groupId>
             <artifactId>google-cloud-dlp</artifactId>
         </dependency>
 
-        <!-- Logging -->
+        <!-- Logging Configuration -->
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
@@ -63,7 +69,7 @@
             <version>1.7.36</version>
         </dependency>
 
-        <!-- Testing -->
+        <!-- Testing Dependencies -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
@@ -80,6 +86,7 @@
 
     <build>
         <plugins>
+            <!-- Compiler Plugin: Set Java Version -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
@@ -89,14 +96,19 @@
                     <target>21</target>
                 </configuration>
             </plugin>
+            
+            <!-- Surefire Plugin: Test Execution -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.2.5</version>
                 <configuration>
+                    <!-- Configure JVM arguments for tests, helpful for Mockito/ByteBuddy -->
                     <argLine>-Djdk.lang.Process.launchMechanism=FORK -Dnet.bytebuddy.experimental=true</argLine>
                 </configuration>
             </plugin>
+            
+            <!-- Shade Plugin: Create "Fat JAR" for Dataflow Execution -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
@@ -109,12 +121,15 @@
                         </goals>
                         <configuration>
                             <transformers>
+                                <!-- Merge Service Files -->
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                                <!-- Set Main Class in Manifest -->
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                                     <mainClass>com.example.dataflow.DlpPipeline</mainClass>
                                 </transformer>
                             </transformers>
                             <filters>
+                                <!-- Exclude signature files to prevent "Invalid signature file digest" errors -->
                                 <filter>
                                     <artifact>*:*</artifact>
                                     <excludes>
