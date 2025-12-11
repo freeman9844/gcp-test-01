@@ -1,7 +1,7 @@
 package com.example.dataflow;
 
-import com.google.api.services.bigquery.model.TableRow;
 import java.util.concurrent.ThreadLocalRandom;
+
 import org.apache.beam.runners.dataflow.options.DataflowPipelineOptions;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO;
@@ -13,12 +13,11 @@ import org.apache.beam.sdk.transforms.GroupIntoBatches;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.SimpleFunction;
 import org.apache.beam.sdk.transforms.WithKeys;
-import org.apache.beam.sdk.values.KV;
-import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionTuple;
 import org.apache.beam.sdk.values.TupleTag;
 import org.apache.beam.sdk.values.TupleTagList;
-import org.apache.beam.sdk.values.TypeDescriptor;
+
+import com.google.api.services.bigquery.model.TableRow;
 
 public class DlpPipeline {
 
@@ -109,14 +108,19 @@ public class DlpPipeline {
                         .withWriteDisposition(BigQueryIO.Write.WriteDisposition.WRITE_APPEND)
                         .withMethod(BigQueryIO.Write.Method.STORAGE_WRITE_API)); // Use Storage Write API
 
-        // Stream 2: Failure - Write failed rows to Error Table (Dead Letter Queue)
+        // Stream 2: Failure - Write Failed Rows (Dead Letter Queue)
         // We write to a table named {output_table}_error
         String errorTable = options.getOutputTable() + "_error";
+
+        // Note: For CREATE_IF_NEEDED to work, we need a schema.
+        // Since we don't have the schema handy, we will use CREATE_NEVER and assume the
+        // user manages the error table
+        // or the error table has been pre-created with the same schema as output.
+        // Documentation update: "Error table must exist if faults occur".
         outputTuple.get(deadLetterTag)
                 .apply("WriteToDLQ", BigQueryIO.writeTableRows()
                         .to(errorTable)
-                        .withCreateDisposition(BigQueryIO.Write.CreateDisposition.CREATE_IF_NEEDED) // Create error
-                                                                                                    // table if missing
+                        .withCreateDisposition(BigQueryIO.Write.CreateDisposition.CREATE_NEVER)
                         .withWriteDisposition(BigQueryIO.Write.WriteDisposition.WRITE_APPEND)
                         .withMethod(BigQueryIO.Write.Method.STORAGE_WRITE_API));
 
