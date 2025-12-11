@@ -1,77 +1,112 @@
 # Dataflow DLP Pipeline - Development & Reproduction Guide
 
-This guide documents the critical configurations and best practices required to successfully build and run the Dataflow DLP pipeline, based on the debugging and development session.
+This guide documents the critical configurations and best practices for building and running the Dataflow DLP pipeline.
+
+---
 
 ## 1. Environment & Build Configuration
 
-### Java Version Compatibility
-*   **Requirement**: Dataflow workers currently support up to **Java 21 (LTS)**.
-*   **Configuration**: Ensure `pom.xml` targets Java 21.
-    ```xml
-    <properties>
-        <maven.compiler.source>21</maven.compiler.source>
-        <maven.compiler.target>21</maven.compiler.target>
-    </properties>
-    ```
+### Java Version
+| Item | Value |
+|------|-------|
+| **Required** | Java 25 |
+| **Build Tool** | Maven 3.9+ |
+
+```xml
+<properties>
+    <maven.compiler.source>25</maven.compiler.source>
+    <maven.compiler.target>25</maven.compiler.target>
+    <beam.version>2.69.0</beam.version>
+</properties>
+```
 
 ### Fat JAR Creation (Uber-Jar)
-*   **Requirement**: Dataflow execution requires a standalone JAR containing all dependencies.
-*   **Plugin**: Use `maven-shade-plugin`.
-*   **Critical Fix**: Exclude signature files to prevent `SecurityException` (`Invalid signature file digest`).
-    ```xml
-    <filter>
-        <artifact>*:*</artifact>
-        <excludes>
-            <exclude>META-INF/*.SF</exclude>
-            <exclude>META-INF/*.DSA</exclude>
-            <exclude>META-INF/*.RSA</exclude>
-        </excludes>
-    </filter>
-    ```
+Use `maven-shade-plugin` with signature file exclusion to prevent `SecurityException`:
+
+```xml
+<filter>
+    <artifact>*:*</artifact>
+    <excludes>
+        <exclude>META-INF/*.SF</exclude>
+        <exclude>META-INF/*.DSA</exclude>
+        <exclude>META-INF/*.RSA</exclude>
+    </excludes>
+</filter>
+```
+
+---
 
 ## 2. DLP Implementation Best Practices
 
 ### InfoType Transformations
-Instead of using a single default mask, use `InfoTypeTransformations` to apply specific rules per data type.
-
-*   **Korea RRN**: Mask last 7 digits (`******`).
-*   **Phone Number**: Mask last 4 digits (`010-1234-****`).
-    *   *Config*: `setNumberToMask(4)`, `setReverseOrder(true)`.
+| InfoType | Masking Strategy | Config |
+|----------|-----------------|--------|
+| `KOREA_RRN` | Last 7 digits | `setNumberToMask(7)`, `setReverseOrder(true)` |
+| `PHONE_NUMBER` | Last 4 digits | `setNumberToMask(4)`, `setReverseOrder(true)` |
 
 ### Detection Sensitivity
-*   **Issue**: Default detection may miss RRNs in mixed text.
-*   **Fix**: Lower the detection threshold in `InspectConfig`.
-    *   `setMinLikelihood(Likelihood.POSSIBLE)`
+For mixed-text RRN detection, lower the threshold:
+```java
+InspectConfig.newBuilder()
+    .setMinLikelihood(Likelihood.POSSIBLE)
+    .build();
+```
+
+---
 
 ## 3. Robustness & Monitoring
 
 ### Metrics
-Implement `Counter` metrics to track pipeline health in the Dataflow console.
-*   `rowsProcessed`: Successful masking.
-*   `rowsFailed`: Errors during DLP API calls.
-*   `dlpApiCalls`: Total API requests made.
+| Metric | Description |
+|--------|-------------|
+| `rowsProcessed` | Successfully masked rows |
+| `rowsFailed` | Failed DLP API calls |
+| `dlpApiCalls` | Total API requests |
 
-### Error Handling (Dead Letter Queue)
-Do not fail the entire batch on a single error.
-*   Use `TupleTag` to split output into **Success** and **Failure** streams.
-*   Route failed rows to a separate BigQuery table (e.g., `_error` suffix) for analysis.
+### Dead Letter Queue (DLQ)
+- Use `TupleTag` to split **Success** and **Failure** streams.
+- Failed rows go to `{output_table}_error`.
+- **Note**: Create the error table before running (`CREATE_NEVER` disposition).
+
+```sql
+CREATE TABLE IF NOT EXISTS `project.dataset.table_error` 
+LIKE `project.dataset.input_table`;
+```
+
+---
 
 ## 4. Execution
 
 ### Network Configuration
-Dataflow jobs in specific regions often require explicit VPC network configuration.
-*   **Command**:
-    ```bash
-    --network=jwlee-vpc-001 \
-    --subnetwork=regions/$REGION/subnetworks/jwlee-vpc-001
-    ```
+```bash
+--network=jwlee-vpc-001 \
+--subnetwork=regions/$REGION/subnetworks/jwlee-vpc-001
+```
 
 ### Running the Pipeline
-Use the provided `run_pipeline.sh` script which encapsulates:
-1.  Setting `JAVA_HOME` (if needed for local launch).
-2.  Building the project (`mvn clean package`).
-3.  Submitting the job with correct parameters.
-
 ```bash
 bash run_pipeline.sh
 ```
+
+The script handles:
+1. Maven build (`mvn clean package -DskipTests`)
+2. Java environment setup
+3. Dataflow job submission with all required parameters
+
+---
+
+## 5. Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| Network errors | Verify `--network` and `--subnetwork` match your VPC |
+| `UnsupportedClassVersionError` | Ensure `pom.xml` targets correct Java version |
+| `Invalid signature file digest` | Add META-INF exclusions to shade plugin |
+| DLQ table not found | Pre-create error table with input schema |
+
+---
+
+## 6. Repository
+
+- **GitHub**: [https://github.com/freeman9844/gcp-test-01](https://github.com/freeman9844/gcp-test-01)
+- **Main Entry**: `com.example.dataflow.DlpPipeline`
