@@ -12,7 +12,7 @@
         <!-- Java 21 is the current recommended LTS for Dataflow workers -->
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
-        <beam.version>2.59.0</beam.version>
+        <beam.version>2.69.0</beam.version>
         <libraries-bom.version>26.29.0</libraries-bom.version>
     </properties>
 
