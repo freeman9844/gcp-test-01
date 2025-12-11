@@ -79,9 +79,12 @@ public class DlpMaskingFn extends DoFn<KV<String, Iterable<TableRow>>, TableRow>
         }
 
         try {
-            // 1. Convert TableRows to DLP Table
-            // We assume all rows have the same schema. We take headers from the first row.
-            // In a production scenario, passing the schema explicitly is safer.
+            // ---------------------------------------------------------
+            // 1. Convert Beam TableRows to DLP Table
+            // ---------------------------------------------------------
+            // We assume all rows in a batch have the same schema.
+            // Using a TreeSet ensures deterministic header ordering, which is crucial for
+            // DLP handling.
             Set<String> headers = new java.util.TreeSet<>();
             for (TableRow row : rowList) {
                 headers.addAll(row.keySet());
@@ -90,6 +93,7 @@ public class DlpMaskingFn extends DoFn<KV<String, Iterable<TableRow>>, TableRow>
                     .map(h -> FieldId.newBuilder().setName(h).build())
                     .collect(Collectors.toList());
 
+            // Build DLP Rows from TableRows
             List<Table.Row> dlpRows = new ArrayList<>();
             for (TableRow row : rowList) {
                 Table.Row.Builder dlpRowBuilder = Table.Row.newBuilder();
@@ -97,10 +101,7 @@ public class DlpMaskingFn extends DoFn<KV<String, Iterable<TableRow>>, TableRow>
                     Object val = row.get(header);
                     Value.Builder valueBuilder = Value.newBuilder();
                     if (val == null) {
-                        // DLP Value doesn't have a clear null, usually we skip or put empty string
-                        // But for Table structure, we need a value.
-                        // Let's use string value "null" or empty string depending on requirement.
-                        // For now, empty string.
+                        // DLP Table requires a value for every cell. Use empty string for nulls.
                         valueBuilder.setStringValue("");
                     } else {
                         valueBuilder.setStringValue(val.toString());
@@ -110,6 +111,7 @@ public class DlpMaskingFn extends DoFn<KV<String, Iterable<TableRow>>, TableRow>
                 dlpRows.add(dlpRowBuilder.build());
             }
 
+            // Create the ContentItem with the Table
             Table dlpTable = Table.newBuilder()
                     .addAllHeaders(dlpHeaders)
                     .addAllRows(dlpRows)
@@ -117,20 +119,27 @@ public class DlpMaskingFn extends DoFn<KV<String, Iterable<TableRow>>, TableRow>
 
             ContentItem contentItem = ContentItem.newBuilder().setTable(dlpTable).build();
 
-            // 2. Call DLP API
+            // ---------------------------------------------------------
+            // 2. Prepare DLP De-identify Request
+            // ---------------------------------------------------------
             DeidentifyContentRequest.Builder requestBuilder = DeidentifyContentRequest.newBuilder()
                     .setParent("projects/" + projectId)
                     .setItem(contentItem);
 
+            // Apply Configuration: Use Template if provided, otherwise use Inline Config
             if (deidentifyTemplateName != null && !deidentifyTemplateName.isEmpty()) {
                 requestBuilder.setDeidentifyTemplateName(deidentifyTemplateName);
             } else {
-                // Default to KOREA_RRN masking if no template provided
-                // Define InfoTypes
+                // -----------------------------------------------------
+                // Inline De-identification Configuration
+                // -----------------------------------------------------
+
+                // Define InfoTypes to detect
                 InfoType rrnInfoType = InfoType.newBuilder().setName("KOREA_RRN").build();
                 InfoType phoneInfoType = InfoType.newBuilder().setName("PHONE_NUMBER").build();
 
-                // 1. RRN Masking Rule
+                // Rule 1: Mask Korean RRN (mask last 7 digits)
+                // e.g., 123456-1234567 -> 123456-*******
                 CharacterMaskConfig rrnMaskConfig = CharacterMaskConfig.newBuilder()
                         .setMaskingCharacter("*")
                         .setNumberToMask(7)
@@ -145,7 +154,8 @@ public class DlpMaskingFn extends DoFn<KV<String, Iterable<TableRow>>, TableRow>
                         .setPrimitiveTransformation(rrnPrimitive)
                         .build();
 
-                // 2. Phone Number Masking Rule - Mask last 4 digits
+                // Rule 2: Mask Phone Number (mask last 4 digits)
+                // e.g., 010-1234-5678 -> 010-1234-****
                 CharacterMaskConfig phoneMaskConfig = CharacterMaskConfig.newBuilder()
                         .setMaskingCharacter("*")
                         .setNumberToMask(4)
@@ -162,6 +172,7 @@ public class DlpMaskingFn extends DoFn<KV<String, Iterable<TableRow>>, TableRow>
                         .setPrimitiveTransformation(phonePrimitive)
                         .build();
 
+                // Combine Transformations
                 InfoTypeTransformations transformations = InfoTypeTransformations.newBuilder()
                         .addTransformations(rrnTransformation)
                         .addTransformations(phoneTransformation)
@@ -173,36 +184,42 @@ public class DlpMaskingFn extends DoFn<KV<String, Iterable<TableRow>>, TableRow>
                 requestBuilder.setDeidentifyConfig(deidentifyConfig);
             }
 
+            // Apply Inspection Config (Required for inline rules or if using
+            // InspectTemplate)
             if (inspectTemplateName != null && !inspectTemplateName.isEmpty()) {
                 requestBuilder.setInspectTemplateName(inspectTemplateName);
             } else if (deidentifyTemplateName == null || deidentifyTemplateName.isEmpty()) {
-                // If we are using inline de-id config, we need inspect config too
+                // If using inline de-id, we need to specify what InfoTypes to inspect for.
                 InfoType rrnInfoType = InfoType.newBuilder().setName("KOREA_RRN").build();
                 InfoType phoneInfoType = InfoType.newBuilder().setName("PHONE_NUMBER").build();
 
                 InspectConfig inspectConfig = InspectConfig.newBuilder()
                         .addInfoTypes(rrnInfoType)
                         .addInfoTypes(phoneInfoType)
-                        .setMinLikelihood(com.google.privacy.dlp.v2.Likelihood.POSSIBLE) // Catch more potential RRNs
+                        // Lower threshold to 'POSSIBLE' to ensure we catch RRNs even in ambiguous
+                        // contexts
+                        .setMinLikelihood(com.google.privacy.dlp.v2.Likelihood.POSSIBLE)
                         .build();
                 requestBuilder.setInspectConfig(inspectConfig);
             }
 
+            // ---------------------------------------------------------
+            // 3. Call DLP API
+            // ---------------------------------------------------------
             DeidentifyContentResponse response = deidentifyContent(requestBuilder.build());
-            dlpApiCalls.inc(); // Increment API call counter
+            dlpApiCalls.inc(); // Metrics: Track API calls
             Table deidentifiedTable = response.getItem().getTable();
 
-            // 3. Convert back to TableRows
+            // ---------------------------------------------------------
+            // 4. Convert DLP Result back to TableRows
+            // ---------------------------------------------------------
             List<Table.Row> outputRows = deidentifiedTable.getRowsList();
             for (Table.Row outputRow : outputRows) {
                 TableRow tableRow = new TableRow();
                 for (int i = 0; i < dlpHeaders.size(); i++) {
                     String header = dlpHeaders.get(i).getName();
                     Value value = outputRow.getValues(i);
-                    // We treat everything as string for simplicity in this generic example
-                    // In real world, we might want to preserve types if possible, but DLP returns
-                    // Values.
-                    // Value has string_value, integer_value, etc.
+                    // Convert DLP Value back to String or appropriate type
                     if (value.hasIntegerValue()) {
                         tableRow.set(header, value.getIntegerValue());
                     } else if (value.hasFloatValue()) {
@@ -219,15 +236,21 @@ public class DlpMaskingFn extends DoFn<KV<String, Iterable<TableRow>>, TableRow>
                         tableRow.set(header, value.getStringValue());
                     }
                 }
+                // Output successful row
                 c.output(successTag, tableRow);
-                rowsProcessed.inc(); // Increment processed counter
+                rowsProcessed.inc(); // Metrics: Track success
             }
 
         } catch (Exception e) {
+            // ---------------------------------------------------------
+            // 5. Error Handling (Dead Letter Queue)
+            // ---------------------------------------------------------
             LOG.error("Error processing batch", e);
-            rowsFailed.inc(rowList.size()); // Increment failed counter by batch size
+            rowsFailed.inc(rowList.size()); // Metrics: Track failures
 
-            // Output all rows in the failed batch to dead-letter queue
+            // If a batch fails, send ALL rows in that batch to the Dead Letter Queue (Error
+            // Table)
+            // This prevents data loss and allows for later replay/analysis.
             for (TableRow row : rowList) {
                 c.output(deadLetterTag, row);
             }

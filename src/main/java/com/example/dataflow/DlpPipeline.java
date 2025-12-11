@@ -52,32 +52,43 @@ public class DlpPipeline {
     }
 
     public static void main(String[] args) {
+        // Parse Pipeline Options from command line arguments
         DlpPipelineOptions options = PipelineOptionsFactory.fromArgs(args)
                 .withValidation()
                 .as(DlpPipelineOptions.class);
 
         Pipeline p = Pipeline.create(options);
 
-        // Default batch size if not provided
+        // Default batch size if not provided (100 is a reasonable default for DLP)
         long batchSize = options.getBatchSize() != null ? options.getBatchSize() : 100L;
 
-        // Define output tags for success and failure
+        // Define output tags for splitting success and failure (Dead Letter Queue)
+        // streams
         TupleTag<TableRow> successTag = new TupleTag<TableRow>() {
         };
         TupleTag<TableRow> deadLetterTag = new TupleTag<TableRow>() {
         };
 
+        // ---------------------------------------------------------
+        // Pipeline DAG Definition
+        // ---------------------------------------------------------
         PCollectionTuple outputTuple = p.apply("ReadFromBigQuery", BigQueryIO.readTableRows()
                 .from(options.getInputTable())
-                .withMethod(Method.DIRECT_READ)) // Use Storage Read API
+                .withMethod(Method.DIRECT_READ)) // Use Storage Read API for high performance
+
+                // Assign Keys to enable Batching
                 .apply("AddKeys", WithKeys.of(new SimpleFunction<TableRow, String>() {
                     @Override
                     public String apply(TableRow input) {
-                        // Random key to distribute load for batching
+                        // random key to evenly distribute load across workers for batching
                         return Integer.toString(ThreadLocalRandom.current().nextInt(100));
                     }
                 }))
+
+                // Group inputs into batches to reduce DLP API overhead
                 .apply("BatchRows", GroupIntoBatches.ofSize(batchSize))
+
+                // Process Batch (DLP Masking)
                 .apply("DlpMasking", ParDo.of(new DlpMaskingFn(
                         options.getProject(),
                         options.getDeidentifyTemplateName(),
@@ -86,23 +97,26 @@ public class DlpPipeline {
                         deadLetterTag))
                         .withOutputTags(successTag, TupleTagList.of(deadLetterTag)));
 
-        // Write Successful Rows
+        // ---------------------------------------------------------
+        // Output Handling
+        // ---------------------------------------------------------
+
+        // Stream 1: Success - Write masked data to Output Table
         outputTuple.get(successTag)
                 .apply("WriteToBigQuery", BigQueryIO.writeTableRows()
                         .to(options.getOutputTable())
                         .withCreateDisposition(BigQueryIO.Write.CreateDisposition.CREATE_NEVER) // Assume table exists
-                                                                                                // or change to
-                                                                                                // CREATE_IF_NEEDED
                         .withWriteDisposition(BigQueryIO.Write.WriteDisposition.WRITE_APPEND)
                         .withMethod(BigQueryIO.Write.Method.STORAGE_WRITE_API)); // Use Storage Write API
 
-        // Write Failed Rows (Dead Letter Queue)
+        // Stream 2: Failure - Write failed rows to Error Table (Dead Letter Queue)
         // We write to a table named {output_table}_error
         String errorTable = options.getOutputTable() + "_error";
         outputTuple.get(deadLetterTag)
                 .apply("WriteToDLQ", BigQueryIO.writeTableRows()
                         .to(errorTable)
-                        .withCreateDisposition(BigQueryIO.Write.CreateDisposition.CREATE_IF_NEEDED)
+                        .withCreateDisposition(BigQueryIO.Write.CreateDisposition.CREATE_IF_NEEDED) // Create error
+                                                                                                    // table if missing
                         .withWriteDisposition(BigQueryIO.Write.WriteDisposition.WRITE_APPEND)
                         .withMethod(BigQueryIO.Write.Method.STORAGE_WRITE_API));
 
