@@ -4,7 +4,7 @@ This project implements a secure and scalable Google Cloud Dataflow pipeline usi
 
 ## 🚀 Features
 
-*   **Scalable Processing**: Built on Apache Beam and executed on Google Cloud Dataflow.
+*   **Scalable Processing**: Built on Apache Beam 2.69.0 and executed on Google Cloud Dataflow.
 *   **PII Masking**: Integrated with Google Cloud DLP API.
     *   **Korean RRN**: Masks the last 7 digits (e.g., `123456-*******`).
     *   **Phone Numbers**: Masks the last 4 digits (e.g., `010-1234-****`).
@@ -29,7 +29,7 @@ graph LR
 ## 🛠 Prerequisites
 
 *   **Google Cloud Project**: With Dataflow, BigQuery, and DLP APIs enabled.
-*   **Java 21**: Required for Dataflow worker compatibility.
+*   **Java 25**: Required for Dataflow worker compatibility (LTS).
 *   **Maven**: For building the project.
 *   **GCP Credentials**: `gcloud auth application-default login` configured.
 
@@ -92,5 +92,5 @@ You can monitor the job in the [Google Cloud Dataflow Console](https://console.c
 ## 🐛 Troubleshooting
 
 *   **Network Errors**: Ensure `--network` and `--subnetwork` match your VPC settings.
-*   **Java Version**: If workers fail to start, verify `pom.xml` targets Java 21 (`<maven.compiler.target>21</maven.compiler.target>`).
+*   **Java Version**: If workers fail to start, verify `pom.xml` targets Java 25 (`<maven.compiler.target>25</maven.compiler.target>`).
 *   **SecurityException**: If `Invalid signature file digest` occurs, ensure `META-INF/*.SF` files are excluded in the shade plugin configuration.
